@@ -81,7 +81,7 @@ export default function LoginPage() {
               <div className={styles.brandIcon}>🛡️</div>
               <div>
                 <div className={styles.brandTop}>Fleetwide Digital</div>
-                <div className={styles.brandName}>YardClock Admin</div>
+                <div className={styles.brandName}>Workforce Admin</div>
               </div>
             </div>
 
