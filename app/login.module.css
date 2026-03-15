@@ -1,0 +1,260 @@
+.page {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0b2f8a 0%, #1146c2 45%, #0a1f52 100%);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.overlay {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 1120px;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 28px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px);
+}
+
+.left {
+  padding: 48px;
+  color: white;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.right {
+  background: #ffffff;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 36px;
+}
+
+.formWrap {
+  width: 100%;
+  max-width: 420px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 34px;
+}
+
+.brandIcon {
+  width: 50px;
+  height: 50px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 24px;
+}
+
+.brandTop {
+  font-size: 14px;
+  font-weight: 700;
+  opacity: 0.9;
+  margin-bottom: 3px;
+}
+
+.brandName {
+  font-size: 32px;
+  font-weight: 900;
+  line-height: 1.05;
+}
+
+.heading {
+  font-size: 44px;
+  line-height: 1.08;
+  margin: 0 0 18px;
+  font-weight: 900;
+  max-width: 520px;
+}
+
+.subtitle {
+  font-size: 18px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.8);
+  max-width: 520px;
+  margin-bottom: 34px;
+}
+
+.featureList {
+  display: grid;
+  gap: 16px;
+  max-width: 520px;
+}
+
+.featureCard {
+  padding: 18px 20px;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.featureTitle {
+  font-size: 15px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.featureText {
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.mobileBrand {
+  display: none;
+  margin-bottom: 18px;
+  color: #2563eb;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.formTitle {
+  margin: 0 0 8px;
+  font-size: 36px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.formSubtitle {
+  margin: 0 0 28px;
+  color: #64748b;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.field {
+  margin-bottom: 18px;
+}
+
+.label {
+  display: block;
+  font-size: 14px;
+  font-weight: 800;
+  color: #334155;
+  margin-bottom: 8px;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #dbe4f0;
+  background: #f8fafc;
+  color: #0f172a;
+  border-radius: 18px;
+  padding: 15px 16px;
+  font-size: 15px;
+  outline: none;
+  transition: 0.2s ease;
+}
+
+.input:focus {
+  border-color: #2563eb;
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.passwordWrap {
+  position: relative;
+}
+
+.passwordWrap .input {
+  padding-right: 84px;
+}
+
+.showButton {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.errorBox {
+  margin-bottom: 18px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+  border-radius: 18px;
+  padding: 14px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.submitButton {
+  width: 100%;
+  border: none;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: white;
+  padding: 16px;
+  font-size: 15px;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 16px 32px rgba(37, 99, 235, 0.28);
+  transition: 0.2s ease;
+}
+
+.submitButton:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+}
+
+.submitButton:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.footerText {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .panel {
+    grid-template-columns: 1fr;
+  }
+
+  .left {
+    display: none;
+  }
+
+  .right {
+    padding: 28px 20px;
+  }
+
+  .mobileBrand {
+    display: block;
+  }
+
+  .formTitle {
+    font-size: 30px;
+  }
+}
