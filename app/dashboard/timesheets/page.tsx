@@ -2,245 +2,286 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase";
-import s from "../_components/shell.module.css";
 
-type Row = {
+type TimeEntry = {
   id: string;
-  user_id: string | null;
+  user_id: string;
   clock_in_at: string | null;
   clock_out_at: string | null;
-  profiles?: { full_name: string | null }[] | null;
+  status: string | null;
+  outside_yard: boolean | null;
+  profiles?: Array<{
+    full_name: string | null;
+  }> | null;
 };
 
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
-function yyyyMmDd(d: Date) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
-function hoursBetween(start: string | null, end: string | null) {
-  if (!start || !end) return null;
-  const a = new Date(start).getTime();
-  const b = new Date(end).getTime();
-  if (!isFinite(a) || !isFinite(b) || b <= a) return null;
-  return Math.round(((b - a) / (1000 * 60 * 60)) * 100) / 100;
-}
-
 export default function TimesheetsPage() {
-  const [rows, setRows] = useState<Row[]>([]);
+  const [rows, setRows] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const [from, setFrom] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return yyyyMmDd(d);
-  });
-
-  const [to, setTo] = useState(() => yyyyMmDd(new Date()));
+  const [errorText, setErrorText] = useState("");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadRows();
   }, []);
 
-  async function load() {
+  async function loadRows() {
     setLoading(true);
+    setErrorText("");
 
-    // day boundaries
-    const startIso = new Date(`${from}T00:00:00`).toISOString();
-    const endDate = new Date(`${to}T00:00:00`);
-    endDate.setDate(endDate.getDate() + 1);
-    const endIso = endDate.toISOString();
+    try {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
 
-    const { data, error } = await supabase
-      .from("time_entries")
-      .select("id,user_id,clock_in_at,clock_out_at,profiles(full_name)")
-      .gte("clock_in_at", startIso)
-      .lt("clock_in_at", endIso)
-      .order("clock_in_at", { ascending: false });
+      if (authErr || !authData.user) {
+        setErrorText("You must be signed in.");
+        return;
+      }
 
-    if (!error && data) setRows(data as any);
-    setLoading(false);
-  }
+      const userId = authData.user.id;
 
-  function formatTime(t: string | null) {
-    if (!t) return "-";
-    return new Date(t).toLocaleString();
-  }
+      const { data: myProfile, error: myProfileErr } = await supabase
+        .from("profiles")
+        .select("company_id, role")
+        .eq("user_id", userId)
+        .maybeSingle();
 
-  const totalsByStaff = useMemo(() => {
-    const map = new Map<string, { name: string; hours: number }>();
-    for (const r of rows) {
-      const name = r.profiles?.[0]?.full_name ?? "Unknown";
-      const hrs = hoursBetween(r.clock_in_at, r.clock_out_at);
-      if (!hrs) continue;
+      if (myProfileErr || !myProfile?.company_id) {
+        setErrorText("Could not load your company.");
+        return;
+      }
 
-      const key = `${r.user_id ?? r.id}`;
-      const prev = map.get(key);
-      if (!prev) map.set(key, { name, hours: hrs });
-      else map.set(key, { name, hours: Math.round((prev.hours + hrs) * 100) / 100 });
+      if (myProfile.role !== "admin") {
+        setErrorText("Admin access only.");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("time_entries")
+        .select(`
+          id,
+          user_id,
+          clock_in_at,
+          clock_out_at,
+          status,
+          outside_yard,
+          profiles (
+            full_name
+          )
+        `)
+        .eq("company_id", myProfile.company_id)
+        .order("clock_in_at", { ascending: false });
+
+      if (error) {
+        setErrorText(error.message);
+        return;
+      }
+
+      setRows((data as TimeEntry[]) ?? []);
+    } catch (e) {
+      setErrorText(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
-    return Array.from(map.values()).sort((a, b) => b.hours - a.hours);
-  }, [rows]);
+  }
 
-  function downloadCsv() {
-    // Payroll-style totals
-    const header = ["Name", "Total Hours"].join(",");
-    const lines = totalsByStaff.map((t) => {
-      const safeName = `"${(t.name ?? "").replaceAll(`"`, `""`)}"`;
-      return [safeName, t.hours.toFixed(2)].join(",");
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+
+    return rows.filter((r) => {
+      const name = r.profiles?.[0]?.full_name?.toLowerCase() ?? "";
+      return name.includes(q);
     });
+  }, [rows, search]);
 
-    const csv = [header, ...lines].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
+  function formatDateTime(value: string | null) {
+    if (!value) return "—";
+    return new Date(value).toLocaleString();
+  }
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `timesheets_${from}_to_${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function formatDuration(start: string | null, end: string | null) {
+    if (!start || !end) return "—";
+
+    const ms = new Date(end).getTime() - new Date(start).getTime();
+    if (ms <= 0) return "—";
+
+    const totalMinutes = Math.floor(ms / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    return `${hours}h ${minutes}m`;
   }
 
   return (
-    <div className={`${s.panel} ${s.panelPad}`}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: 12, flexWrap: "wrap" }}>
+    <div style={styles.page}>
+      <div style={styles.headerRow}>
         <div>
-          <div className={s.h1}>Timesheets</div>
-          <div className={s.muted}>Filter by date range and export totals.</div>
+          <h1 style={styles.title}>Timesheets</h1>
+          <p style={styles.subtitle}>Review clock-ins, clock-outs, and outside-yard warnings.</p>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ fontWeight: 900, color: "rgba(255,255,255,0.8)" }}>
-            From{" "}
-            <input
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-              type="date"
-              style={dateStyle}
-            />
-          </label>
-
-          <label style={{ fontWeight: 900, color: "rgba(255,255,255,0.8)" }}>
-            To{" "}
-            <input
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-              type="date"
-              style={dateStyle}
-            />
-          </label>
-
-          <button onClick={load} className={s.signOut}>
-            Apply
-          </button>
-
-          <button onClick={downloadCsv} className={s.signOut}>
-            Export CSV
-          </button>
-        </div>
+        <button onClick={loadRows} style={styles.refreshButton}>
+          Refresh
+        </button>
       </div>
 
-      <div style={{ height: 18 }} />
-
-      {/* Totals summary */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12, marginBottom: 16 }}>
-        <div
-          style={{
-            padding: 14,
-            borderRadius: 16,
-            background: "rgba(0,0,0,0.18)",
-            border: "1px solid rgba(255,255,255,0.14)",
-          }}
-        >
-          <div style={{ fontWeight: 950, marginBottom: 8 }}>Totals (payroll-style)</div>
-          {totalsByStaff.length === 0 ? (
-            <div style={{ color: "rgba(255,255,255,0.75)", fontWeight: 750 }}>No completed shifts in this range.</div>
-          ) : (
-            <div style={{ display: "grid", gap: 6 }}>
-              {totalsByStaff.slice(0, 8).map((t, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <div style={{ fontWeight: 850 }}>{t.name}</div>
-                  <div style={{ fontWeight: 950 }}>{t.hours.toFixed(2)} hrs</div>
-                </div>
-              ))}
-              {totalsByStaff.length > 8 && (
-                <div style={{ color: "rgba(255,255,255,0.70)", fontWeight: 750 }}>
-                  + {totalsByStaff.length - 8} more…
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+      <div style={styles.toolbar}>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search worker name..."
+          style={styles.searchInput}
+        />
       </div>
 
-      {/* Table */}
       {loading ? (
-        <div style={{ fontWeight: 800 }}>Loading…</div>
+        <div style={styles.messageBox}>Loading timesheets...</div>
+      ) : errorText ? (
+        <div style={styles.errorBox}>{errorText}</div>
+      ) : filteredRows.length === 0 ? (
+        <div style={styles.messageBox}>No timesheets found.</div>
       ) : (
-        <table className={s.table}>
-          <thead>
-            <tr>
-              <th>Staff</th>
-              <th>Clock In</th>
-              <th>Clock Out</th>
-              <th>Hours</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {rows.map((r) => {
-              const name = r.profiles?.[0]?.full_name ?? "Unknown";
-              const active = r.clock_out_at === null;
-              const hrs = hoursBetween(r.clock_in_at, r.clock_out_at);
-
-              return (
-                <tr key={r.id} className={s.rowHover}>
-                  <td style={{ fontWeight: 950 }}>{name}</td>
-                  <td>{formatTime(r.clock_in_at)}</td>
-                  <td>{formatTime(r.clock_out_at)}</td>
-                  <td style={{ fontWeight: 950 }}>{hrs === null ? "-" : hrs.toFixed(2)}</td>
-                  <td>
-                    {active ? (
-                      <span style={badge("green")}>Clocked In</span>
+        <div style={styles.tableWrap}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Worker</th>
+                <th style={styles.th}>Clock In</th>
+                <th style={styles.th}>Clock Out</th>
+                <th style={styles.th}>Duration</th>
+                <th style={styles.th}>Status</th>
+                <th style={styles.th}>Flags</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((row) => (
+                <tr key={row.id}>
+                  <td style={styles.td}>{row.profiles?.[0]?.full_name ?? "Unnamed"}</td>
+                  <td style={styles.td}>{formatDateTime(row.clock_in_at)}</td>
+                  <td style={styles.td}>{formatDateTime(row.clock_out_at)}</td>
+                  <td style={styles.td}>{formatDuration(row.clock_in_at, row.clock_out_at)}</td>
+                  <td style={styles.td}>{row.status ?? "—"}</td>
+                  <td style={styles.td}>
+                    {row.outside_yard ? (
+                      <span style={styles.warningBadge}>Outside Yard</span>
                     ) : (
-                      <span style={badge("blue")}>Completed</span>
+                      <span style={styles.okBadge}>OK</span>
                     )}
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
 }
 
-const dateStyle: React.CSSProperties = {
-  marginLeft: 8,
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.16)",
-  background: "rgba(0,0,0,0.18)",
-  color: "rgba(255,255,255,0.92)",
-  fontWeight: 900,
-};
-
-function badge(kind: "green" | "blue") {
-  const bg =
-    kind === "green" ? "rgba(16,185,129,0.25)" : "rgba(59,130,246,0.25)";
-  const border =
-    kind === "green" ? "rgba(16,185,129,0.35)" : "rgba(59,130,246,0.35)";
-  return {
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    padding: 24,
+    background: "#f8fafc",
+    minHeight: "100vh",
+    fontFamily: "Arial, Helvetica, sans-serif",
+  },
+  headerRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+    marginBottom: 20,
+  },
+  title: {
+    margin: 0,
+    fontSize: 30,
+    fontWeight: 900,
+    color: "#0f172a",
+  },
+  subtitle: {
+    margin: "8px 0 0",
+    color: "#64748b",
+    fontSize: 15,
+  },
+  refreshButton: {
+    background: "#2563eb",
+    color: "#fff",
+    border: "none",
+    borderRadius: 12,
+    padding: "12px 16px",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+  toolbar: {
+    marginBottom: 16,
+  },
+  searchInput: {
+    width: 320,
+    maxWidth: "100%",
+    padding: "12px 14px",
+    borderRadius: 12,
+    border: "1px solid #cbd5e1",
+    outline: "none",
+    fontSize: 14,
+  },
+  tableWrap: {
+    background: "#fff",
+    borderRadius: 18,
+    overflow: "hidden",
+    border: "1px solid #e2e8f0",
+    boxShadow: "0 10px 30px rgba(15, 23, 42, 0.06)",
+  },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+  },
+  th: {
+    textAlign: "left",
+    padding: "14px 16px",
+    background: "#eff6ff",
+    color: "#1e3a8a",
+    fontSize: 13,
+    fontWeight: 900,
+    borderBottom: "1px solid #dbeafe",
+  },
+  td: {
+    padding: "14px 16px",
+    borderBottom: "1px solid #e2e8f0",
+    color: "#0f172a",
+    fontSize: 14,
+    verticalAlign: "middle",
+  },
+  warningBadge: {
     display: "inline-block",
+    background: "#fef3c7",
+    color: "#92400e",
     padding: "6px 10px",
     borderRadius: 999,
-    fontWeight: 950,
-    background: bg,
-    border: `1px solid ${border}`,
-  } as React.CSSProperties;
-}
+    fontSize: 12,
+    fontWeight: 900,
+  },
+  okBadge: {
+    display: "inline-block",
+    background: "#dcfce7",
+    color: "#166534",
+    padding: "6px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+  },
+  messageBox: {
+    background: "#fff",
+    border: "1px solid #e2e8f0",
+    borderRadius: 16,
+    padding: 18,
+    color: "#334155",
+  },
+  errorBox: {
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 16,
+    padding: 18,
+    color: "#b91c1c",
+    fontWeight: 700,
+  },
+};
