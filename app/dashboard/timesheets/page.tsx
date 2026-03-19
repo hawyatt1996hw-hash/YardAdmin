@@ -10,13 +10,23 @@ type TimeEntry = {
   clock_out_at: string | null;
   status: string | null;
   outside_yard: boolean | null;
-  profiles?: Array<{
-    full_name: string | null;
-  }> | null;
+  company_id: string | null;
+};
+
+type Profile = {
+  user_id: string | null;
+  full_name: string | null;
+  email: string | null;
+  company_id: string | null;
+  role: string | null;
+};
+
+type Row = TimeEntry & {
+  worker_name: string;
 };
 
 export default function TimesheetsPage() {
-  const [rows, setRows] = useState<TimeEntry[]>([]);
+  const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
   const [search, setSearch] = useState("");
@@ -37,12 +47,12 @@ export default function TimesheetsPage() {
         return;
       }
 
-      const userId = authData.user.id;
+      const myUserId = authData.user.id;
 
       const { data: myProfile, error: myProfileErr } = await supabase
         .from("profiles")
         .select("company_id, role")
-        .eq("user_id", userId)
+        .eq("user_id", myUserId)
         .maybeSingle();
 
       if (myProfileErr || !myProfile?.company_id) {
@@ -55,28 +65,50 @@ export default function TimesheetsPage() {
         return;
       }
 
-      const { data, error } = await supabase
+      const companyId = myProfile.company_id;
+
+      const { data: timeData, error: timeErr } = await supabase
         .from("time_entries")
-        .select(`
-          id,
-          user_id,
-          clock_in_at,
-          clock_out_at,
-          status,
-          outside_yard,
-          profiles (
-            full_name
-          )
-        `)
-        .eq("company_id", myProfile.company_id)
+        .select("id,user_id,clock_in_at,clock_out_at,status,outside_yard,company_id")
+        .eq("company_id", companyId)
         .order("clock_in_at", { ascending: false });
 
-      if (error) {
-        setErrorText(error.message);
+      if (timeErr) {
+        setErrorText(timeErr.message);
         return;
       }
 
-      setRows((data as TimeEntry[]) ?? []);
+      const { data: profileData, error: profileErr } = await supabase
+        .from("profiles")
+        .select("user_id,full_name,email,company_id,role")
+        .eq("company_id", companyId);
+
+      if (profileErr) {
+        setErrorText(profileErr.message);
+        return;
+      }
+
+      const profileMap = new Map<string, Profile>();
+      for (const p of (profileData as Profile[]) ?? []) {
+        if (p.user_id) {
+          profileMap.set(p.user_id, p);
+        }
+      }
+
+      const merged: Row[] = ((timeData as TimeEntry[]) ?? []).map((t) => {
+        const p = profileMap.get(t.user_id);
+
+        return {
+          ...t,
+          worker_name:
+            p?.full_name?.trim() ||
+            p?.email?.trim() ||
+            t.user_id ||
+            "Unknown user",
+        };
+      });
+
+      setRows(merged);
     } catch (e) {
       setErrorText(e instanceof Error ? e.message : String(e));
     } finally {
@@ -88,10 +120,7 @@ export default function TimesheetsPage() {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
 
-    return rows.filter((r) => {
-      const name = r.profiles?.[0]?.full_name?.toLowerCase() ?? "";
-      return name.includes(q);
-    });
+    return rows.filter((r) => r.worker_name.toLowerCase().includes(q));
   }, [rows, search]);
 
   function formatDateTime(value: string | null) {
@@ -103,7 +132,7 @@ export default function TimesheetsPage() {
     if (!start || !end) return "—";
 
     const ms = new Date(end).getTime() - new Date(start).getTime();
-    if (ms <= 0) return "—";
+    if (ms <= 0) return "0h 0m";
 
     const totalMinutes = Math.floor(ms / 60000);
     const hours = Math.floor(totalMinutes / 60);
@@ -156,7 +185,7 @@ export default function TimesheetsPage() {
             <tbody>
               {filteredRows.map((row) => (
                 <tr key={row.id}>
-                  <td style={styles.td}>{row.profiles?.[0]?.full_name ?? "Unnamed"}</td>
+                  <td style={styles.td}>{row.worker_name}</td>
                   <td style={styles.td}>{formatDateTime(row.clock_in_at)}</td>
                   <td style={styles.td}>{formatDateTime(row.clock_out_at)}</td>
                   <td style={styles.td}>{formatDuration(row.clock_in_at, row.clock_out_at)}</td>
