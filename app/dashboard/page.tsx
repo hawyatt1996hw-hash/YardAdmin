@@ -26,7 +26,6 @@ type VehicleCheck = {
 };
 
 type StaffLocation = {
-  id?: string;
   user_id: string;
   lat: number;
   lng: number;
@@ -108,12 +107,7 @@ export default function DashboardPage() {
       todayStart.setHours(0, 0, 0, 0);
       const todayIso = todayStart.toISOString();
 
-      const [
-        timeEntriesRes,
-        profilesRes,
-        checksRes,
-        locationsRes,
-      ] = await Promise.all([
+      const [timeEntriesRes, profilesRes, checksRes, locationsRes] = await Promise.all([
         supabase
           .from("time_entries")
           .select("id,user_id,clock_in_at,clock_out_at,status,company_id")
@@ -167,14 +161,9 @@ export default function DashboardPage() {
 
       const mappedTimesheets: DashboardTimeRow[] = timeEntries.map((t) => {
         const p = profileMap.get(t.user_id);
-
         return {
           ...t,
-          worker_name:
-            p?.full_name?.trim() ||
-            p?.email?.trim() ||
-            t.user_id ||
-            "Unknown user",
+          worker_name: p?.full_name?.trim() || p?.email?.trim() || t.user_id || "Unknown user",
         };
       });
 
@@ -187,11 +176,7 @@ export default function DashboardPage() {
         return {
           id: c.id,
           vehicle_reg: c.vehicle_reg,
-          driver_name:
-            p?.full_name?.trim() ||
-            p?.email?.trim() ||
-            c.user_id ||
-            "Unknown user",
+          driver_name: p?.full_name?.trim() || p?.email?.trim() || c.user_id || "Unknown user",
           defect_text: c.notes?.trim() || "Defect recorded",
           resolved: c.resolved === true,
           created_at: c.created_at,
@@ -199,6 +184,16 @@ export default function DashboardPage() {
       });
 
       const openEntries = timeEntries.filter((t) => !t.clock_out_at);
+      const activeUserIds = new Set(openEntries.map((t) => t.user_id));
+
+      const latestLocationByUser = new Map<string, StaffLocation>();
+      for (const loc of locations) {
+        if (!activeUserIds.has(loc.user_id)) continue;
+        if (!latestLocationByUser.has(loc.user_id)) {
+          latestLocationByUser.set(loc.user_id, loc);
+        }
+      }
+
       const checksTodayCount = checks.filter((c) => (c.created_at ?? "") >= todayIso).length;
 
       let totalMs = 0;
@@ -219,7 +214,7 @@ export default function DashboardPage() {
       setHoursToday(totalHoursToday);
       setRecentTimesheets(mappedTimesheets.slice(0, 5));
       setLatestDefects(mappedDefects);
-      setLocationCount(locations.length);
+      setLocationCount(latestLocationByUser.size);
     } catch (e) {
       setErrorText(e instanceof Error ? e.message : String(e));
     } finally {
@@ -240,9 +235,7 @@ export default function DashboardPage() {
 
   return (
     <div className={s.pageWrap}>
-      {errorText ? (
-        <div style={errorBox}>{errorText}</div>
-      ) : null}
+      {errorText ? <div style={errorBox}>{errorText}</div> : null}
 
       <div style={statsGrid}>
         <StatCard title="Clocked In" value={loading ? "..." : String(clockedInNow)} subtitle="Right now" />
