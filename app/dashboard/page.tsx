@@ -248,7 +248,7 @@ export default function DashboardPage() {
         <div className={`${s.panel} ${s.panelPad}`}>
           <div style={cardHeader}>
             <div style={sectionTitle}>Live Map Preview</div>
-            <Link href="/dashboard/live-map" style={linkStyle}>Open map →</Link>
+            <Link href="/dashboard/map" style={linkStyle}>Open map →</Link>
           </div>
           <div className={s.muted}>{loading ? "Loading..." : liveMapText}</div>
         </div>
