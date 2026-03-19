@@ -1,9 +1,14 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import s from "./_components/shell.module.css";
+
+const LeafletMap = dynamic(() => import("./map/_map"), {
+  ssr: false,
+});
 
 type TimeEntry = {
   id: string;
@@ -54,6 +59,14 @@ type DashboardDefectRow = {
   created_at: string | null;
 };
 
+type MapPoint = {
+  user_id: string;
+  lat: number;
+  lng: number;
+  created_at: string;
+  profiles?: { full_name: string | null } | null;
+};
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
@@ -65,7 +78,7 @@ export default function DashboardPage() {
 
   const [recentTimesheets, setRecentTimesheets] = useState<DashboardTimeRow[]>([]);
   const [latestDefects, setLatestDefects] = useState<DashboardDefectRow[]>([]);
-  const [locationCount, setLocationCount] = useState(0);
+  const [mapPoints, setMapPoints] = useState<MapPoint[]>([]);
 
   useEffect(() => {
     loadDashboard();
@@ -128,7 +141,6 @@ export default function DashboardPage() {
         supabase
           .from("staff_locations")
           .select("user_id,lat,lng,created_at,company_id")
-          .eq("company_id", companyId)
           .order("created_at", { ascending: false }),
       ]);
 
@@ -189,10 +201,24 @@ export default function DashboardPage() {
       const latestLocationByUser = new Map<string, StaffLocation>();
       for (const loc of locations) {
         if (!activeUserIds.has(loc.user_id)) continue;
+        if (!profileMap.has(loc.user_id)) continue;
         if (!latestLocationByUser.has(loc.user_id)) {
           latestLocationByUser.set(loc.user_id, loc);
         }
       }
+
+      const previewPoints: MapPoint[] = Array.from(latestLocationByUser.values()).map((loc) => {
+        const p = profileMap.get(loc.user_id);
+        return {
+          user_id: loc.user_id,
+          lat: loc.lat,
+          lng: loc.lng,
+          created_at: loc.created_at,
+          profiles: {
+            full_name: p?.full_name?.trim() || p?.email?.trim() || loc.user_id,
+          },
+        };
+      });
 
       const checksTodayCount = checks.filter((c) => (c.created_at ?? "") >= todayIso).length;
 
@@ -214,7 +240,7 @@ export default function DashboardPage() {
       setHoursToday(totalHoursToday);
       setRecentTimesheets(mappedTimesheets.slice(0, 5));
       setLatestDefects(mappedDefects);
-      setLocationCount(latestLocationByUser.size);
+      setMapPoints(previewPoints);
     } catch (e) {
       setErrorText(e instanceof Error ? e.message : String(e));
     } finally {
@@ -227,11 +253,10 @@ export default function DashboardPage() {
     return new Date(value).toLocaleString();
   }
 
-  const liveMapText = useMemo(() => {
-    if (locationCount === 0) return "No location rows yet.";
-    if (locationCount === 1) return "1 live location row.";
-    return `${locationCount} live location rows.`;
-  }, [locationCount]);
+  const mapCenter = useMemo(() => {
+    if (mapPoints.length === 0) return { lat: 50.867019, lng: -1.216812 };
+    return { lat: mapPoints[0].lat, lng: mapPoints[0].lng };
+  }, [mapPoints]);
 
   return (
     <div className={s.pageWrap}>
@@ -250,7 +275,16 @@ export default function DashboardPage() {
             <div style={sectionTitle}>Live Map Preview</div>
             <Link href="/dashboard/map" style={linkStyle}>Open map →</Link>
           </div>
-          <div className={s.muted}>{loading ? "Loading..." : liveMapText}</div>
+
+          {loading ? (
+            <div className={s.muted}>Loading map...</div>
+          ) : mapPoints.length === 0 ? (
+            <div className={s.muted}>No location rows yet.</div>
+          ) : (
+            <div style={mapPreviewWrap}>
+              <LeafletMap center={mapCenter} points={mapPoints} />
+            </div>
+          )}
         </div>
 
         <div className={`${s.panel} ${s.panelPad}`}>
@@ -403,6 +437,13 @@ const miniItem: React.CSSProperties = {
   borderRadius: 14,
   background: "rgba(255,255,255,0.06)",
   border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const mapPreviewWrap: React.CSSProperties = {
+  height: 320,
+  width: "100%",
+  overflow: "hidden",
+  borderRadius: 16,
 };
 
 const errorBox: React.CSSProperties = {
