@@ -1,252 +1,282 @@
 "use client";
 
 import Link from "next/link";
-import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import s from "./_components/shell.module.css";
 
-type TimeRow = {
+type TimeEntry = {
   id: string;
+  user_id: string;
   clock_in_at: string | null;
   clock_out_at: string | null;
-  profiles?: { full_name: string | null }[] | null;
+  status: string | null;
+  company_id: string | null;
 };
 
-type DefectRow = {
+type VehicleCheck = {
   id: string;
+  user_id: string | null;
   vehicle_reg: string | null;
-  created_at: string | null;
+  defects_found: boolean | null;
   resolved: boolean | null;
-  severity: string | null;
-  defect_text: string | null;
-  profiles?: { full_name: string | null }[] | null;
+  created_at: string | null;
+  company_id: string | null;
+  notes: string | null;
 };
 
-type LocationRow = {
+type StaffLocation = {
+  id?: string;
   user_id: string;
   lat: number;
   lng: number;
   created_at: string;
-  profiles?: { full_name: string | null } | null;
+  company_id: string | null;
 };
 
-const MiniMap = dynamic(() => import("./map/_map"), { ssr: false });
+type Profile = {
+  user_id: string | null;
+  full_name: string | null;
+  email: string | null;
+  company_id: string | null;
+  role: string | null;
+};
 
-function formatTime(t: string | null) {
-  if (!t) return "-";
-  return new Date(t).toLocaleString();
-}
+type DashboardTimeRow = TimeEntry & {
+  worker_name: string;
+};
 
-function hoursBetween(start: string | null, end: string | null) {
-  if (!start || !end) return 0;
-  const a = new Date(start).getTime();
-  const b = new Date(end).getTime();
-  if (!isFinite(a) || !isFinite(b) || b <= a) return 0;
-  return (b - a) / (1000 * 60 * 60);
-}
+type DashboardDefectRow = {
+  id: string;
+  vehicle_reg: string | null;
+  driver_name: string;
+  defect_text: string;
+  resolved: boolean;
+  created_at: string | null;
+};
 
-export default function DashboardHome() {
+export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
+  const [errorText, setErrorText] = useState("");
 
-  const [clockedIn, setClockedIn] = useState(0);
+  const [clockedInNow, setClockedInNow] = useState(0);
   const [openDefects, setOpenDefects] = useState(0);
   const [checksToday, setChecksToday] = useState(0);
   const [hoursToday, setHoursToday] = useState(0);
 
-  const [recentTimes, setRecentTimes] = useState<TimeRow[]>([]);
-  const [recentDefects, setRecentDefects] = useState<DefectRow[]>([]);
-  const [locations, setLocations] = useState<LocationRow[]>([]);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [recentTimesheets, setRecentTimesheets] = useState<DashboardTimeRow[]>([]);
+  const [latestDefects, setLatestDefects] = useState<DashboardDefectRow[]>([]);
+  const [locationCount, setLocationCount] = useState(0);
 
   useEffect(() => {
-    loadAll();
-    const t = setInterval(loadAll, 15000);
-    return () => clearInterval(t);
+    loadDashboard();
   }, []);
 
-  async function loadAll() {
+  async function loadDashboard() {
     setLoading(true);
+    setErrorText("");
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayIso = today.toISOString();
+    try {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
 
-    // 1) Clocked in count
-    const { data: active } = await supabase
-      .from("time_entries")
-      .select("id")
-      .is("clock_out_at", null);
+      if (authErr || !authData.user) {
+        setErrorText("You must be signed in.");
+        return;
+      }
 
-    setClockedIn(active?.length ?? 0);
+      const myUserId = authData.user.id;
 
-    // 2) Open defects count
-    const { data: defects } = await supabase
-      .from("vehicle_checks")
-      .select("id")
-      .eq("defects_found", true)
-      .eq("resolved", false);
+      const { data: myProfile, error: myProfileErr } = await supabase
+        .from("profiles")
+        .select("company_id, role")
+        .eq("user_id", myUserId)
+        .maybeSingle();
 
-    setOpenDefects(defects?.length ?? 0);
+      if (myProfileErr || !myProfile?.company_id) {
+        setErrorText("Could not load your company.");
+        return;
+      }
 
-    // 3) Vehicle checks today count
-    const { data: checks } = await supabase
-      .from("vehicle_checks")
-      .select("id")
-      .gte("checked_at", todayIso);
+      if (myProfile.role !== "admin") {
+        setErrorText("Admin access only.");
+        return;
+      }
 
-    setChecksToday(checks?.length ?? 0);
+      const companyId = myProfile.company_id;
 
-    // 4) Hours today (completed shifts that started today)
-    const { data: todayTimes } = await supabase
-      .from("time_entries")
-      .select("clock_in_at,clock_out_at")
-      .gte("clock_in_at", todayIso);
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayIso = todayStart.toISOString();
 
-    const total = (todayTimes ?? []).reduce((sum: number, r: any) => {
-      return sum + hoursBetween(r.clock_in_at ?? null, r.clock_out_at ?? null);
-    }, 0);
+      const [
+        timeEntriesRes,
+        profilesRes,
+        checksRes,
+        locationsRes,
+      ] = await Promise.all([
+        supabase
+          .from("time_entries")
+          .select("id,user_id,clock_in_at,clock_out_at,status,company_id")
+          .eq("company_id", companyId)
+          .order("clock_in_at", { ascending: false }),
 
-    setHoursToday(Math.round(total * 10) / 10);
+        supabase
+          .from("profiles")
+          .select("user_id,full_name,email,company_id,role")
+          .eq("company_id", companyId),
 
-    // 5) Recent timesheets
-    const { data: recentT } = await supabase
-      .from("time_entries")
-      .select("id,clock_in_at,clock_out_at,profiles(full_name)")
-      .order("clock_in_at", { ascending: false })
-      .limit(8);
+        supabase
+          .from("vehicle_checks")
+          .select("id,user_id,vehicle_reg,defects_found,resolved,created_at,company_id,notes")
+          .eq("company_id", companyId)
+          .order("created_at", { ascending: false }),
 
-    setRecentTimes((recentT as any) ?? []);
+        supabase
+          .from("staff_locations")
+          .select("user_id,lat,lng,created_at,company_id")
+          .eq("company_id", companyId)
+          .order("created_at", { ascending: false }),
+      ]);
 
-    // 6) Recent defects (latest)
-    const { data: recentD } = await supabase
-      .from("vehicle_checks")
-      .select("id,vehicle_reg,created_at,resolved,severity,defect_text,profiles(full_name)")
-      .eq("defects_found", true)
-      .order("created_at", { ascending: false })
-      .limit(6);
+      if (timeEntriesRes.error) {
+        setErrorText(timeEntriesRes.error.message);
+        return;
+      }
+      if (profilesRes.error) {
+        setErrorText(profilesRes.error.message);
+        return;
+      }
+      if (checksRes.error) {
+        setErrorText(checksRes.error.message);
+        return;
+      }
+      if (locationsRes.error) {
+        setErrorText(locationsRes.error.message);
+        return;
+      }
 
-    setRecentDefects((recentD as any) ?? []);
+      const timeEntries = (timeEntriesRes.data ?? []) as TimeEntry[];
+      const profiles = (profilesRes.data ?? []) as Profile[];
+      const checks = (checksRes.data ?? []) as VehicleCheck[];
+      const locations = (locationsRes.data ?? []) as StaffLocation[];
 
-    // 7) Latest location per user (mini map)
-    const { data: locs } = await supabase
-      .from("staff_locations")
-      .select("user_id,lat,lng,created_at,profiles(full_name)")
-      .order("created_at", { ascending: false })
-      .limit(200);
+      const profileMap = new Map<string, Profile>();
+      for (const p of profiles) {
+        if (p.user_id) profileMap.set(p.user_id, p);
+      }
 
-    const map = new Map<string, LocationRow>();
-    for (const l of (locs as any[]) ?? []) {
-      if (!map.has(l.user_id)) map.set(l.user_id, l as LocationRow);
+      const mappedTimesheets: DashboardTimeRow[] = timeEntries.map((t) => {
+        const p = profileMap.get(t.user_id);
+
+        return {
+          ...t,
+          worker_name:
+            p?.full_name?.trim() ||
+            p?.email?.trim() ||
+            t.user_id ||
+            "Unknown user",
+        };
+      });
+
+      const checksWithDefects = checks.filter((c) => c.defects_found === true);
+      const openDefectsRows = checksWithDefects.filter((c) => c.resolved !== true);
+
+      const mappedDefects: DashboardDefectRow[] = checksWithDefects.slice(0, 5).map((c) => {
+        const p = c.user_id ? profileMap.get(c.user_id) : null;
+
+        return {
+          id: c.id,
+          vehicle_reg: c.vehicle_reg,
+          driver_name:
+            p?.full_name?.trim() ||
+            p?.email?.trim() ||
+            c.user_id ||
+            "Unknown user",
+          defect_text: c.notes?.trim() || "Defect recorded",
+          resolved: c.resolved === true,
+          created_at: c.created_at,
+        };
+      });
+
+      const openEntries = timeEntries.filter((t) => !t.clock_out_at);
+      const checksTodayCount = checks.filter((c) => (c.created_at ?? "") >= todayIso).length;
+
+      let totalMs = 0;
+      for (const t of timeEntries) {
+        if (!t.clock_in_at || !t.clock_out_at) continue;
+        if (t.clock_in_at < todayIso && t.clock_out_at < todayIso) continue;
+
+        const start = new Date(t.clock_in_at).getTime();
+        const end = new Date(t.clock_out_at).getTime();
+        if (end > start) totalMs += end - start;
+      }
+
+      const totalHoursToday = Math.round((totalMs / 3600000) * 10) / 10;
+
+      setClockedInNow(openEntries.length);
+      setOpenDefects(openDefectsRows.length);
+      setChecksToday(checksTodayCount);
+      setHoursToday(totalHoursToday);
+      setRecentTimesheets(mappedTimesheets.slice(0, 5));
+      setLatestDefects(mappedDefects);
+      setLocationCount(locations.length);
+    } catch (e) {
+      setErrorText(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
-    setLocations(Array.from(map.values()));
-
-    setLastUpdated(new Date());
-    setLoading(false);
   }
 
-  const center = useMemo(() => {
-    if (locations.length === 0) return { lat: 51.5074, lng: -0.1278 };
-    return { lat: locations[0].lat, lng: locations[0].lng };
-  }, [locations]);
+  function formatDateTime(value: string | null) {
+    if (!value) return "-";
+    return new Date(value).toLocaleString();
+  }
+
+  const liveMapText = useMemo(() => {
+    if (locationCount === 0) return "No location rows yet.";
+    if (locationCount === 1) return "1 live location row.";
+    return `${locationCount} live location rows.`;
+  }, [locationCount]);
 
   return (
-    <div style={{ display: "grid", gap: 18 }}>
-      {/* Top row */}
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <div className={s.h1}>Dashboard</div>
-          <div className={s.muted}>
-            {loading ? "Updating…" : "Live overview"}{" "}
-            {lastUpdated ? `• Last update ${lastUpdated.toLocaleTimeString()}` : ""}
-          </div>
-        </div>
+    <div className={s.pageWrap}>
+      {errorText ? (
+        <div style={errorBox}>{errorText}</div>
+      ) : null}
 
-        <button onClick={loadAll} className={s.signOut}>
-          Refresh
-        </button>
+      <div style={statsGrid}>
+        <StatCard title="Clocked In" value={loading ? "..." : String(clockedInNow)} subtitle="Right now" />
+        <StatCard title="Open Defects" value={loading ? "..." : String(openDefects)} subtitle="Needs attention" />
+        <StatCard title="Checks Today" value={loading ? "..." : String(checksToday)} subtitle="Submitted" />
+        <StatCard title="Hours Today" value={loading ? "..." : String(hoursToday)} subtitle="Completed shifts" />
       </div>
 
-      {/* KPI tiles */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-          gap: 14,
-        }}
-      >
-        <Kpi title="Clocked In" value={clockedIn} sub="Right now" />
-        <Kpi title="Open Defects" value={openDefects} sub="Needs attention" tone="red" />
-        <Kpi title="Checks Today" value={checksToday} sub="Submitted" tone="blue" />
-        <Kpi title="Hours Today" value={hoursToday} sub="Completed shifts" tone="green" />
-      </div>
-
-      {/* Main grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 14 }}>
-        {/* Mini map */}
-        <div className={s.panel} style={{ overflow: "hidden" }}>
-          <div style={{ padding: 14, borderBottom: "1px solid rgba(255,255,255,0.14)", display: "flex", justifyContent: "space-between" }}>
-            <div style={{ fontWeight: 950 }}>Live Map Preview</div>
-            <Link href="/dashboard/map" style={{ fontWeight: 950, opacity: 0.9 }}>
-              Open map →
-            </Link>
-          </div>
-
-          <div style={{ height: 380 }}>
-            {locations.length === 0 ? (
-              <div style={{ padding: 14, fontWeight: 800, color: "rgba(255,255,255,0.75)" }}>
-                No location rows yet.
-              </div>
-            ) : (
-              <MiniMap center={center} points={locations} />
-            )}
-          </div>
-        </div>
-
-        {/* Latest defects */}
+      <div style={topGrid}>
         <div className={`${s.panel} ${s.panelPad}`}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 950 }}>Latest Defects</div>
-            <Link href="/dashboard/defects" style={{ fontWeight: 950, opacity: 0.9 }}>
-              View all →
-            </Link>
+          <div style={cardHeader}>
+            <div style={sectionTitle}>Live Map Preview</div>
+            <Link href="/dashboard/live-map" style={linkStyle}>Open map →</Link>
+          </div>
+          <div className={s.muted}>{loading ? "Loading..." : liveMapText}</div>
+        </div>
+
+        <div className={`${s.panel} ${s.panelPad}`}>
+          <div style={cardHeader}>
+            <div style={sectionTitle}>Latest Defects</div>
+            <Link href="/dashboard/defects" style={linkStyle}>View all →</Link>
           </div>
 
-          <div style={{ height: 12 }} />
-
-          {recentDefects.length === 0 ? (
-            <div style={{ fontWeight: 800, color: "rgba(255,255,255,0.75)" }}>
-              No defects reported yet.
-            </div>
+          {loading ? (
+            <div className={s.muted}>Loading defects...</div>
+          ) : latestDefects.length === 0 ? (
+            <div className={s.muted}>No defects reported yet.</div>
           ) : (
-            <div style={{ display: "grid", gap: 10 }}>
-              {recentDefects.map((d) => (
-                <div
-                  key={d.id}
-                  style={{
-                    padding: 12,
-                    borderRadius: 16,
-                    background: "rgba(0,0,0,0.18)",
-                    border: "1px solid rgba(255,255,255,0.14)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <div style={{ fontWeight: 950 }}>
-                      {d.vehicle_reg ?? "Vehicle"}{" "}
-                      <span style={{ opacity: 0.7, fontWeight: 800 }}>
-                        • {d.profiles?.[0]?.full_name ?? "Unknown"}
-                      </span>
-                    </div>
-                    <span style={severityBadge(d.severity)}>{d.severity ?? "minor"}</span>
-                  </div>
-
-                  <div style={{ marginTop: 8, color: "rgba(255,255,255,0.78)", fontWeight: 700 }}>
-                    {(d.defect_text ?? "").trim() || "No details"}
-                  </div>
-
-                  <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(255,255,255,0.72)" }}>
-                    {formatTime(d.created_at)} {d.resolved ? "• Resolved" : "• Open"}
-                  </div>
+            <div style={{ display: "grid", gap: 12 }}>
+              {latestDefects.map((d) => (
+                <div key={d.id} style={miniItem}>
+                  <div style={{ fontWeight: 900 }}>{d.vehicle_reg ?? "-"}</div>
+                  <div className={s.muted}>{d.driver_name}</div>
+                  <div style={{ fontSize: 14 }}>{d.defect_text}</div>
                 </div>
               ))}
             </div>
@@ -254,21 +284,16 @@ export default function DashboardHome() {
         </div>
       </div>
 
-      {/* Recent timesheets */}
       <div className={`${s.panel} ${s.panelPad}`}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontWeight: 950 }}>Recent Timesheets</div>
-          <Link href="/dashboard/timesheets" style={{ fontWeight: 950, opacity: 0.9 }}>
-            View all →
-          </Link>
+        <div style={cardHeader}>
+          <div style={sectionTitle}>Recent Timesheets</div>
+          <Link href="/dashboard/timesheets" style={linkStyle}>View all →</Link>
         </div>
 
-        <div style={{ height: 14 }} />
-
-        {recentTimes.length === 0 ? (
-          <div style={{ fontWeight: 800, color: "rgba(255,255,255,0.75)" }}>
-            No timesheets yet.
-          </div>
+        {loading ? (
+          <div className={s.muted}>Loading timesheets...</div>
+        ) : recentTimesheets.length === 0 ? (
+          <div className={s.muted}>No timesheets yet.</div>
         ) : (
           <table className={s.table}>
             <thead>
@@ -280,112 +305,119 @@ export default function DashboardHome() {
               </tr>
             </thead>
             <tbody>
-              {recentTimes.map((r) => {
-                const name = r.profiles?.[0]?.full_name ?? "Unknown";
-                const active = r.clock_out_at === null;
-                return (
-                  <tr key={r.id} className={s.rowHover}>
-                    <td style={{ fontWeight: 950 }}>{name}</td>
-                    <td>{formatTime(r.clock_in_at)}</td>
-                    <td>{formatTime(r.clock_out_at)}</td>
-                    <td>
-                      {active ? (
-                        <span style={badge("green")}>Clocked In</span>
-                      ) : (
-                        <span style={badge("blue")}>Completed</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+              {recentTimesheets.map((r) => (
+                <tr key={r.id} className={s.rowHover}>
+                  <td style={{ fontWeight: 900 }}>{r.worker_name}</td>
+                  <td>{formatDateTime(r.clock_in_at)}</td>
+                  <td>{formatDateTime(r.clock_out_at)}</td>
+                  <td>
+                    <span style={statusBadge(r.status)}>
+                      {r.clock_out_at ? "Completed" : "Open"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
       </div>
-
-      {/* responsive tweak */}
-      <style jsx>{`
-        @media (max-width: 1100px) {
-          .kpis {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-        }
-      `}</style>
     </div>
   );
 }
 
-function Kpi({
+function StatCard({
   title,
   value,
-  sub,
-  tone,
+  subtitle,
 }: {
   title: string;
-  value: number;
-  sub: string;
-  tone?: "red" | "blue" | "green";
+  value: string;
+  subtitle: string;
 }) {
-  const accent =
-    tone === "red"
-      ? "rgba(239,68,68,0.35)"
-      : tone === "green"
-      ? "rgba(16,185,129,0.35)"
-      : tone === "blue"
-      ? "rgba(59,130,246,0.35)"
-      : "rgba(255,255,255,0.16)";
-
   return (
-    <div
-      className={`${s.panel} ${s.panelPad}`}
-      style={{
-        border: `1px solid ${accent}`,
-      }}
-    >
-      <div style={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>{title}</div>
-      <div style={{ fontSize: 34, fontWeight: 980, marginTop: 6 }}>{value}</div>
-      <div style={{ color: "rgba(255,255,255,0.68)", fontWeight: 800, marginTop: 6 }}>{sub}</div>
+    <div className={s.panel} style={statCard}>
+      <div style={statTitle}>{title}</div>
+      <div style={statValue}>{value}</div>
+      <div className={s.muted} style={{ fontWeight: 900 }}>{subtitle}</div>
     </div>
   );
 }
 
-function severityBadge(level: string | null) {
-  if (level === "danger")
-    return {
-      background: "rgba(239,68,68,0.25)",
-      border: "1px solid rgba(239,68,68,0.35)",
-      padding: "5px 10px",
-      borderRadius: 999,
-      fontWeight: 950,
-    } as React.CSSProperties;
-
-  if (level === "major")
-    return {
-      background: "rgba(245,158,11,0.25)",
-      border: "1px solid rgba(245,158,11,0.35)",
-      padding: "5px 10px",
-      borderRadius: 999,
-      fontWeight: 950,
-    } as React.CSSProperties;
-
+function statusBadge(status: string | null) {
+  const closed = status === "clocked_out";
   return {
-    background: "rgba(59,130,246,0.25)",
-    border: "1px solid rgba(59,130,246,0.35)",
-    padding: "5px 10px",
+    background: closed ? "rgba(59,130,246,0.22)" : "rgba(245,158,11,0.22)",
+    border: closed ? "1px solid rgba(59,130,246,0.34)" : "1px solid rgba(245,158,11,0.34)",
+    padding: "6px 12px",
     borderRadius: 999,
-    fontWeight: 950,
-  } as React.CSSProperties;
-}
-
-function badge(kind: "green" | "blue") {
-  const bg = kind === "green" ? "rgba(16,185,129,0.25)" : "rgba(59,130,246,0.25)";
-  const border = kind === "green" ? "rgba(16,185,129,0.35)" : "rgba(59,130,246,0.35)";
-  return {
+    fontWeight: 900,
     display: "inline-block",
-    padding: "6px 10px",
-    borderRadius: 999,
-    fontWeight: 950,
-    background: bg,
-    border: `1px solid ${border}`,
   } as React.CSSProperties;
 }
+
+const statsGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const topGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1.5fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const cardHeader: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  marginBottom: 14,
+};
+
+const linkStyle: React.CSSProperties = {
+  color: "white",
+  textDecoration: "none",
+  fontWeight: 900,
+  opacity: 0.9,
+};
+
+const sectionTitle: React.CSSProperties = {
+  fontWeight: 900,
+  fontSize: 18,
+};
+
+const statCard: React.CSSProperties = {
+  padding: 18,
+};
+
+const statTitle: React.CSSProperties = {
+  fontWeight: 900,
+  fontSize: 16,
+  marginBottom: 10,
+};
+
+const statValue: React.CSSProperties = {
+  fontSize: 46,
+  fontWeight: 900,
+  lineHeight: 1,
+  marginBottom: 8,
+};
+
+const miniItem: React.CSSProperties = {
+  padding: 12,
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const errorBox: React.CSSProperties = {
+  background: "rgba(239,68,68,0.15)",
+  border: "1px solid rgba(239,68,68,0.35)",
+  color: "#fff",
+  padding: "12px 14px",
+  borderRadius: 12,
+  fontWeight: 800,
+  marginBottom: 16,
+};
