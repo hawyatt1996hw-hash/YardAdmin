@@ -29,7 +29,7 @@ type AnswerRow = {
   comment: string | null;
   vehicle_check_items?: {
     label: string | null;
-  } | null;
+  }[] | null;
 };
 
 type DefectRow = {
@@ -40,6 +40,8 @@ type DefectRow = {
   severity: "minor" | "major";
   resolved: boolean;
   created_at: string | null;
+  notes: string;
+  item_lines: string[];
 };
 
 export default function DefectsPage() {
@@ -48,6 +50,8 @@ export default function DefectsPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
+  const [busyResolveId, setBusyResolveId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<DefectRow | null>(null);
 
   useEffect(() => {
     load();
@@ -129,7 +133,7 @@ export default function DefectsPage() {
           return;
         }
 
-        answers = (ansData ?? []) as unknown as AnswerRow[];
+        answers = (ansData ?? []) as AnswerRow[];
       }
 
       const answersByCheck = new Map<string, AnswerRow[]>();
@@ -143,14 +147,14 @@ export default function DefectsPage() {
         const profile = check.user_id ? profileMap.get(check.user_id) : null;
         const failedAnswers = answersByCheck.get(check.id) ?? [];
 
-        const answerLines = failedAnswers.map((a) => {
-          const label = a.vehicle_check_items?.label?.trim() || "Checklist item";
+        const itemLines = failedAnswers.map((a) => {
+          const label = a.vehicle_check_items?.[0]?.label?.trim() || "Checklist item";
           const comment = a.comment?.trim();
           return comment ? `${label}: ${comment}` : `${label}: Not OK`;
         });
 
-        const notes = check.notes?.trim();
-        const allText = [...answerLines, ...(notes ? [notes] : [])].join(" • ");
+        const notes = check.notes?.trim() || "";
+        const summary = [...itemLines, ...(notes ? [notes] : [])].join(" • ");
 
         return {
           id: check.id,
@@ -160,10 +164,12 @@ export default function DefectsPage() {
             profile?.email?.trim() ||
             check.user_id ||
             "Unknown user",
-          defect_text: allText || "Defect recorded",
+          defect_text: summary || "Defect recorded",
           severity: failedAnswers.length >= 2 ? "major" : "minor",
           resolved: check.resolved === true,
           created_at: check.created_at,
+          notes,
+          item_lines: itemLines,
         };
       });
 
@@ -176,8 +182,32 @@ export default function DefectsPage() {
   }
 
   async function resolve(id: string) {
-    await supabase.from("vehicle_checks").update({ resolved: true }).eq("id", id);
-    load();
+    setBusyResolveId(id);
+    setErrorText("");
+
+    try {
+      const { error } = await supabase
+        .from("vehicle_checks")
+        .update({ resolved: true })
+        .eq("id", id);
+
+      if (error) {
+        setErrorText(error.message);
+        return;
+      }
+
+      setRows((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, resolved: true } : r))
+      );
+
+      if (selected?.id === id) {
+        setSelected({ ...selected, resolved: true });
+      }
+    } catch (e) {
+      setErrorText(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyResolveId(null);
+    }
   }
 
   function formatTime(t: string | null) {
@@ -249,17 +279,18 @@ export default function DefectsPage() {
 
           <tbody>
             {filtered.map((r) => (
-              <tr key={r.id} className={s.rowHover}>
+              <tr
+                key={r.id}
+                className={s.rowHover}
+                onClick={() => setSelected(r)}
+                style={{ cursor: "pointer" }}
+              >
                 <td style={{ fontWeight: 900 }}>{r.vehicle_reg ?? "-"}</td>
-
                 <td>{r.driver_name}</td>
-
-                <td style={{ maxWidth: 350 }}>{r.defect_text}</td>
-
+                <td style={{ maxWidth: 350 }}>{truncate(r.defect_text, 90)}</td>
                 <td>
                   <span style={severityBadge(r.severity)}>{r.severity}</span>
                 </td>
-
                 <td>
                   {r.resolved ? (
                     <span style={resolvedBadge}>Resolved</span>
@@ -267,13 +298,15 @@ export default function DefectsPage() {
                     <span style={openBadge}>Open</span>
                   )}
                 </td>
-
                 <td>{formatTime(r.created_at)}</td>
-
-                <td>
+                <td onClick={(e) => e.stopPropagation()}>
                   {!r.resolved && (
-                    <button onClick={() => resolve(r.id)} style={resolveBtn}>
-                      Resolve
+                    <button
+                      onClick={() => resolve(r.id)}
+                      style={resolveBtn}
+                      disabled={busyResolveId === r.id}
+                    >
+                      {busyResolveId === r.id ? "Resolving..." : "Resolve"}
                     </button>
                   )}
                 </td>
@@ -282,11 +315,75 @@ export default function DefectsPage() {
           </tbody>
         </table>
       )}
+
+      {selected && (
+        <div style={modalOverlay} onClick={() => setSelected(null)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={modalHeader}>
+              <div>
+                <div style={modalTitle}>{selected.vehicle_reg ?? "Vehicle defect"}</div>
+                <div style={modalSub}>
+                  {selected.driver_name} • {formatTime(selected.created_at)}
+                </div>
+              </div>
+              <button onClick={() => setSelected(null)} style={closeBtn}>
+                Close
+              </button>
+            </div>
+
+            <div style={{ height: 12 }} />
+
+            <div style={detailRow}>
+              <span style={detailLabel}>Status</span>
+              <span style={selected.resolved ? resolvedBadge : openBadge}>
+                {selected.resolved ? "Resolved" : "Open"}
+              </span>
+            </div>
+
+            <div style={detailRow}>
+              <span style={detailLabel}>Severity</span>
+              <span style={severityBadge(selected.severity)}>{selected.severity}</span>
+            </div>
+
+            <div style={{ height: 14 }} />
+
+            <div style={sectionTitle}>Checklist failures</div>
+            {selected.item_lines.length === 0 ? (
+              <div className={s.muted}>No individual failed items recorded.</div>
+            ) : (
+              <ul style={listStyle}>
+                {selected.item_lines.map((line, i) => (
+                  <li key={i} style={listItemStyle}>
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div style={{ height: 14 }} />
+
+            <div style={sectionTitle}>Additional notes</div>
+            <div style={notesBox}>
+              {selected.notes?.trim() ? selected.notes : "No additional notes."}
+            </div>
+
+            {!selected.resolved && (
+              <div style={{ marginTop: 16 }}>
+                <button
+                  onClick={() => resolve(selected.id)}
+                  style={resolveBtn}
+                  disabled={busyResolveId === selected.id}
+                >
+                  {busyResolveId === selected.id ? "Resolving..." : "Resolve defect"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-/* ---------- UI ---------- */
 
 function FilterBtn({
   label,
@@ -315,6 +412,11 @@ function FilterBtn({
   );
 }
 
+function truncate(text: string, max: number) {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...`;
+}
+
 const searchBox: React.CSSProperties = {
   padding: "10px 12px",
   borderRadius: 12,
@@ -325,7 +427,7 @@ const searchBox: React.CSSProperties = {
 };
 
 const resolveBtn: React.CSSProperties = {
-  padding: "6px 10px",
+  padding: "8px 12px",
   borderRadius: 10,
   border: "none",
   background: "#16a34a",
@@ -357,6 +459,94 @@ const errorBox: React.CSSProperties = {
   padding: "12px 14px",
   borderRadius: 12,
   fontWeight: 800,
+};
+
+const modalOverlay: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.55)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+  zIndex: 50,
+};
+
+const modalCard: React.CSSProperties = {
+  width: "100%",
+  maxWidth: 760,
+  background: "#0f172a",
+  border: "1px solid rgba(255,255,255,0.10)",
+  borderRadius: 18,
+  padding: 20,
+  color: "white",
+  boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
+};
+
+const modalHeader: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 12,
+};
+
+const modalTitle: React.CSSProperties = {
+  fontSize: 26,
+  fontWeight: 900,
+};
+
+const modalSub: React.CSSProperties = {
+  marginTop: 6,
+  color: "#cbd5e1",
+  fontWeight: 700,
+};
+
+const closeBtn: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.16)",
+  background: "rgba(255,255,255,0.06)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const detailRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  marginBottom: 10,
+};
+
+const detailLabel: React.CSSProperties = {
+  minWidth: 70,
+  fontWeight: 900,
+  color: "#cbd5e1",
+};
+
+const sectionTitle: React.CSSProperties = {
+  fontWeight: 900,
+  fontSize: 16,
+  marginBottom: 8,
+};
+
+const listStyle: React.CSSProperties = {
+  margin: 0,
+  paddingLeft: 20,
+};
+
+const listItemStyle: React.CSSProperties = {
+  marginBottom: 8,
+  lineHeight: 1.5,
+};
+
+const notesBox: React.CSSProperties = {
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.10)",
+  borderRadius: 12,
+  padding: 12,
+  color: "#e5e7eb",
+  lineHeight: 1.5,
 };
 
 function severityBadge(level: string | null) {
