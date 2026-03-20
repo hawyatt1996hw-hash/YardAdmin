@@ -136,6 +136,8 @@ export default function DashboardPage() {
           .from("vehicle_checks")
           .select("id,user_id,vehicle_reg,defects_found,resolved,created_at,company_id,notes")
           .eq("company_id", companyId)
+          .eq("defects_found", true)
+          .eq("resolved", false)
           .order("created_at", { ascending: false }),
 
         supabase
@@ -179,10 +181,7 @@ export default function DashboardPage() {
         };
       });
 
-      const checksWithDefects = checks.filter((c) => c.defects_found === true);
-      const openDefectsRows = checksWithDefects.filter((c) => c.resolved !== true);
-
-      const mappedDefects: DashboardDefectRow[] = checksWithDefects.slice(0, 5).map((c) => {
+      const mappedDefects: DashboardDefectRow[] = checks.slice(0, 5).map((c) => {
         const p = c.user_id ? profileMap.get(c.user_id) : null;
 
         return {
@@ -190,7 +189,7 @@ export default function DashboardPage() {
           vehicle_reg: c.vehicle_reg,
           driver_name: p?.full_name?.trim() || p?.email?.trim() || c.user_id || "Unknown user",
           defect_text: c.notes?.trim() || "Defect recorded",
-          resolved: c.resolved === true,
+          resolved: false,
           created_at: c.created_at,
         };
       });
@@ -235,7 +234,7 @@ export default function DashboardPage() {
       const totalHoursToday = Math.round((totalMs / 3600000) * 10) / 10;
 
       setClockedInNow(openEntries.length);
-      setOpenDefects(openDefectsRows.length);
+      setOpenDefects(checks.length);
       setChecksToday(checksTodayCount);
       setHoursToday(totalHoursToday);
       setRecentTimesheets(mappedTimesheets.slice(0, 5));
@@ -296,7 +295,7 @@ export default function DashboardPage() {
           {loading ? (
             <div className={s.muted}>Loading defects...</div>
           ) : latestDefects.length === 0 ? (
-            <div className={s.muted}>No defects reported yet.</div>
+            <div className={s.muted}>No open defects.</div>
           ) : (
             <div style={{ display: "grid", gap: 12 }}>
               {latestDefects.map((d) => (
